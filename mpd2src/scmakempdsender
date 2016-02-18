@@ -40,18 +40,19 @@ import socket
 
 uxsender = "mpd2sc"
 def usage(f):
-    print("Usage: scmakempdsender [-h] [-f friendlyname] [-p mpdport] [-u]",
+    print("Usage: scmakempdsender [-h] [-f friendlyname] [-p mpdport] [-u] [-e]",
           file=f)
     sys.exit(1)
     
 upmpdclitoo = False
 mpdport = 6700
+externalvolume = False
 # Upmpdcli friendly-name. Used to compute a Uuid in conjunction with
 # the node name
 upmpdcli_fname = "UpMpd"
 
 args = sys.argv[1:]
-opts, args = getopt.getopt(args, "hup:f:")
+opts, args = getopt.getopt(args, "hup:f:e")
 for opt, arg in opts:
     if opt in ['-h']:
         usage(sys.stdout)
@@ -61,6 +62,8 @@ for opt, arg in opts:
         mpdport = int(arg)
     elif opt in ['-u']:
         upmpdclitoo = True
+    elif opt in ['-e']:
+        externalvolume = True
     else:
         print("unknown option %s\n"%opt, file=sys.stderr)
         usage(sys.stderr)
@@ -111,6 +114,11 @@ signal.signal(signal.SIGINT, sighandler)
 signal.signal(signal.SIGTERM, sighandler)
 
 # MPD configuration in temporary file
+if externalvolume:
+    mixertype = 'null'
+else:
+    mixertype = 'software
+    
 mpdconf_template='''
 bind_to_address	 "localhost"
 port		 "%d"
@@ -124,9 +132,9 @@ audio_output {
     path    "%s"
     format  "44100:16:2"
 }
-mixer_type  "software"
+mixer_type  "%s"
 '''
-print(mpdconf_template % (mpdport, mpdfifo), file = mpdconf)
+print(mpdconf_template % (mpdport, mpdfifo, mixertype), file = mpdconf)
 mpdconf.flush()
 
 
