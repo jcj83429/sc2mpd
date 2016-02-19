@@ -117,7 +117,7 @@ signal.signal(signal.SIGTERM, sighandler)
 if externalvolume:
     mixertype = 'null'
 else:
-    mixertype = 'software
+    mixertype = 'software'
     
 mpdconf_template='''
 bind_to_address	 "localhost"

@@ -1,22 +1,29 @@
+sc2mpd (1.1.1-1) unstable; urgency=low
+
+  * Add option to ignore volume change requests on stream.
+  * Bump version for consistency with upmpdcli
+  
+ -- Jean-Francois Dockes <jf@dockes.org>  Thu, 18 Feb 2016 17:58:00 +0100
+
 sc2mpd (0.14.0-1) unstable; urgency=low
 
   * Add stdin read capability to mpd2sc for integrating with ext sources
   
- -- Jean-Francois Dockes <jf@dockes.org>  Thu, 04 Feb 2016 18:07:00 +0200
+ -- Jean-Francois Dockes <jf@dockes.org>  Thu, 04 Feb 2016 18:07:00 +0100
 
 sc2mpd (0.13.0-1) unstable; urgency=low
 
   * Add the mpd2sc Songcast Sender tool
   * New package build with integrated openhome libs build
   
- -- Jean-Francois Dockes <jf@dockes.org>  Mon, 21 Dec 2015 19:27:00 +0200
+ -- Jean-Francois Dockes <jf@dockes.org>  Mon, 21 Dec 2015 19:27:00 +0100
 
 sc2mpd (0.11.2-1) unstable; urgency=low
 
   * Fix buffer management issue causing crashes with alternative Sender.
   * Update openhome git versions
   
- -- Jean-Francois Dockes <jf@dockes.org>  Mon, 15 Dec 2015 18:44:00 +0200
+ -- Jean-Francois Dockes <jf@dockes.org>  Mon, 15 Dec 2015 18:44:00 +0100
 
 sc2mpd (0.11.1-1) unstable; urgency=low
 
