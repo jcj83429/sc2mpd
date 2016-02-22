@@ -564,6 +564,9 @@ bool stretch_buffer(AudioMessage *tsk,
     return true;
 }
 
+// Take data out of songcast, possibly stretch it and send it to the
+// alsa queue.  We are run by a separate thread and normally never
+// return.
 static void *audioEater(void *cls)
 {
     AudioEater::Context *ctxt = (AudioEater::Context*)cls;
@@ -596,25 +599,20 @@ static void *audioEater(void *cls)
 
     while (true) {
         AudioMessage *tsk = 0;
-        size_t qsz;
-        if (!queue->take(&tsk, &qsz)) {
+        // Get new data
+        if (!queue->take(&tsk)) {
             LOGDEB("audioEater: alsadirect: queue take failed\n");
-            alsaqueue.setTerminateAndWait();
-            queue->workerExit();
-            return (void*)1;
+            goto done;
         }
-
         if (tsk->m_bytes == 0 || tsk->m_chans == 0 || tsk->m_bits == 0) {
             LOGDEB("Zero buf\n");
             continue;
         }
 
-        // 1st time: init
+        // 1st time: init. We don't want to do this before we have data.
         if (src_state == 0) {
             if (!alsa_init(alsadevice, tsk)) {
-                alsaqueue.setTerminateAndWait();
-                queue->workerExit();
-                return (void *)1;
+                goto done;
             }
             if (cvt_type != -1) {
                 src_state = src_new(cvt_type, tsk->m_chans, &src_error);
@@ -627,9 +625,7 @@ static void *audioEater(void *cls)
         if (cvt_type != -1) {
             if (!stretch_buffer(tsk, src_state, src_data, src_input_bytes,
                                filter)) {
-                alsaqueue.setTerminateAndWait();
-                queue->workerExit();
-                return (void *)1;
+                goto done;
             }
         } else {
             convert_to16le(tsk);
@@ -638,10 +634,27 @@ static void *audioEater(void *cls)
         // Send data on its way
         if (!alsaqueue.put(tsk)) {
             LOGERR("alsaEater: queue put failed\n");
-            queue->workerExit();
-            return (void *)1;
+            goto alsaerror;
         }
     }
+
+
+done:
+    alsaqueue.setTerminateAndWait();
+alsaerror:
+    queue->workerExit();
+
+    if (src_state) {
+        if (cvt_type != -1) {
+            src_delete(src_state);
+        } else {
+            free(src_state);
+        }
+    }
+    free(src_data.data_in);
+    free(src_data.data_out);
+    LOGDEB("audioEater returning");
+    return (void *)1;
 }
 
 AudioEater alsaAudioEater(AudioEater::BO_HOST, &audioEater);
