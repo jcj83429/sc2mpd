@@ -241,6 +241,8 @@ public:
 };
 
 // Convert config parameter to libsamplerate converter type
+// Hopefully this will never include neg values, as we use -1 to mean
+// "no conversion"
 static int src_cvt_type(ConfSimple *config)
 {
     int tp = SRC_SINC_FASTEST;
@@ -260,6 +262,8 @@ static int src_cvt_type(ConfSimple *config)
         tp = SRC_ZERO_ORDER_HOLD;
     } else if (!value.compare("SRC_LINEAR")) {
         tp = SRC_LINEAR;
+    } else if (!value.compare("NONE")) {
+        tp = -1;
     } else {
         // Allow numeric values for transparent expansion to
         // hypothetic libsamplerate updates (allowing this is explicit
@@ -275,8 +279,291 @@ static int src_cvt_type(ConfSimple *config)
         }
     }
     return tp;
-
 }
+
+// Computing the samplerate conversion factor. We want to keep
+// the queue at its target size to control the delay. The
+// present hack sort of works but could probably benefit from
+// a more scientific approach
+static double compute_ratio(double& samplerate_ratio, int bufframes,
+                            Filter& filter)
+{
+    // Integral term. We do not use it at the moment
+    // double it = 0;
+
+    double qs = 0.0;
+    
+    if (qinit) {
+        // Qsize in frames. This is the variable to control
+        qs = alsaqueue.qsize() * bufframes + alsadelay();
+        // Error term
+        double qstargframes = qstarg * bufframes;
+        double et =  ((qstargframes - qs) / qstargframes);
+
+        // Integral. Not used, made it worse each time I tried.
+        // This is probably because our command is actually the
+        // derivative of the error? I should try a derivative term
+        // instead?
+        // it += et;
+
+        // Error correction coef
+        double ce = 0.1;
+
+        // Integral coef
+        //double ci = 0.0001;
+
+        // Compute command
+        double adj = ce * et /* + ci * it*/;
+
+        // Also tried a quadratic correction, worse.
+        // double adj = et * ((et < 0) ? -et : et);
+
+        // Computed ratio
+        samplerate_ratio =  1.0 + adj;
+
+        // Limit extension
+        if (samplerate_ratio < 0.9) 
+            samplerate_ratio = 0.9;
+        if (samplerate_ratio > 1.1)
+            samplerate_ratio = 1.1;
+
+    } else {
+        // Starting up, wait for more info
+        qs = alsaqueue.qsize();
+        samplerate_ratio = 1.0;
+        // it = 0;
+    }
+
+    // Average the rate value to eliminate fast oscillations
+    return filter(samplerate_ratio);
+}
+
+// Convert ints input buffer into floats for libsamplerate processing
+// Data always comes in host order, because this is what we
+// request from upstream. 24 and 32 bits are untested.
+static bool fixToFloats(AudioMessage *tsk, SRC_DATA& src_data,
+                        size_t tot_samples)
+{
+    switch (tsk->m_bits) {
+    case 16: 
+    {
+        const short *sp = (const short *)tsk->m_buf;
+        for (unsigned int i = 0; i < tot_samples; i++) {
+            src_data.data_in[i] = *sp++;
+        }
+    }
+    break;
+    case 24: 
+    {
+        const unsigned char *icp = (const unsigned char *)tsk->m_buf;
+        int o;
+        unsigned char *ocp = (unsigned char *)&o;
+        for (unsigned int i = 0; i < tot_samples; i++) {
+            ocp[0] = *icp++;
+            ocp[1] = *icp++;
+            ocp[2] = *icp++;
+            ocp[3] = (ocp[2] & 0x80) ? 0xff : 0;
+            src_data.data_in[i] = o;
+        }
+    }
+    break;
+    case 32: 
+    {
+        const int *ip = (const int *)tsk->m_buf;
+        for (unsigned int i = 0; i < tot_samples; i++) {
+            src_data.data_in[i] = *ip++;
+        }
+    }
+    break;
+    default:
+        LOGERR("audioEater:alsa: bad m_bits: " << tsk->m_bits << endl);
+        return false;
+    }
+    return true;
+}
+
+// Convert floats buffer into output which is always 16LE for now. We
+// should probably dither the lsb ?
+// The libsamplerate output values can overshoot the input range (see
+// http://www.mega-nerd.com/SRC/faq.html#Q001), so we take care to
+// clip the values.
+bool floatsToFix(AudioMessage *tsk, SRC_DATA& src_data,
+                size_t tot_samples)
+{
+    short *sp = (short *)tsk->m_buf;
+    switch (tsk->m_bits) {
+    case 16:
+        for (unsigned int i = 0; i < tot_samples; i++) {
+            int v = src_data.data_out[i];
+            if (v > 32767) {
+                v = 32767;
+            } else if (v < -32768) {
+                v = -32768;
+            }
+            *sp++ = BSWAP16(short(v));
+        }
+    break;
+    case 24:
+        for (unsigned int i = 0; i < tot_samples; i++) {
+            int v = src_data.data_out[i];
+            if (v > (1 << 23) - 1) {
+                v = (1 << 23) - 1;
+            } else if (v < -(1 << 23)) {
+                v = -(1 << 23);
+            }
+            *sp++ = BSWAP16(short(v >> 8));
+        }
+    break;
+    case 32:
+        for (unsigned int i = 0; i < tot_samples; i++) {
+            float& f = src_data.data_out[i];
+            int v = f;
+            if (f > 0 && v < 0) {
+                v = unsigned(1 << 31) - 1;
+            } else if (f < 0 && v > 0) {
+                v = -unsigned(1 << 31);
+            }
+            *sp++ = BSWAP16(short(v >> 16));
+        }
+    break;
+    default:
+        LOGERR("audioEater:alsa: bad m_bits: " << tsk->m_bits << endl);
+        return false;
+    }
+    tsk->m_bytes = (char *)sp - tsk->m_buf;
+    tsk->m_bits = 16;
+    return true;
+}
+
+// Convert input buffer to 16le. Input samples are 16 bits or more, in
+// host order. Data can only shrink, no allocation needed.
+bool convert_to16le(AudioMessage *tsk)
+{
+    unsigned int tot_samples = tsk->samples();
+    short *sp = (short *)tsk->m_buf;
+    switch (tsk->m_bits) {
+    case 16:
+        for (unsigned int i = 0; i < tot_samples; i++) {
+            short v = *sp;
+            *sp++ = BSWAP16(v);
+        }
+    break;
+    case 24:
+    {
+        const unsigned char *icp = (const unsigned char *)tsk->m_buf;
+        for (unsigned int i = 0; i < tot_samples; i++) {
+            int o;
+            unsigned char *ocp = (unsigned char *)&o;
+            ocp[0] = *icp++;
+            ocp[1] = *icp++;
+            ocp[2] = *icp++;
+            ocp[3] = (ocp[2] & 0x80) ? 0xff : 0;
+            *sp++ = BSWAP16(short(o >> 8));
+        }
+    }
+    break;
+    case 32:
+    {
+        const int *ip = (const int *)tsk->m_buf;
+        for (unsigned int i = 0; i < tot_samples; i++) {
+            *sp++ = BSWAP16(short((*ip++) >> 16));
+        }
+    }
+    break;
+    default:
+        LOGERR("audioEater:alsa: bad m_bits: " << tsk->m_bits << endl);
+        return false;
+    }
+    tsk->m_bytes = (char *)sp - tsk->m_buf;
+    tsk->m_bits = 16;
+    return true;
+}
+
+// Complete input processing:
+// - compute samplerate conversion factor,
+// - convert input to float
+// - apply conversion
+// - Convert back to int16le
+bool stretch_buffer(AudioMessage *tsk,
+                    SRC_STATE * src_state, SRC_DATA& src_data,
+                    size_t& src_input_bytes, Filter& filter)
+{
+    // Number of frames per buffer. This is mostly constant for a
+    // given stream (depends on fe and buffer time, Windows Songcast
+    // buffers are 10mS, so 441 frames at cd q). Recomputed on first
+    // buf, the init is to avoid warnings
+    int bufframes = tsk->frames();
+
+    double samplerate_ratio = 1.0;
+    unsigned int tot_samples = tsk->samples();
+
+    // Compute sample rate ratio, and return current qsize in
+    // frames. This is the variable which we control.
+    double qs = compute_ratio(samplerate_ratio, bufframes, filter);
+
+    src_data.input_frames = tsk->frames();
+
+    // Possibly reallocate buffer
+    size_t needed_bytes = tot_samples * sizeof(float);
+    if (src_input_bytes < needed_bytes) {
+        src_data.data_in =
+            (float *)realloc(src_data.data_in, needed_bytes);
+        src_data.data_out = (float *)realloc(src_data.data_out,
+                                             2 * needed_bytes);
+        src_data.output_frames = 2 * tot_samples / tsk->m_chans;
+        src_input_bytes = needed_bytes;
+    }
+
+    src_data.src_ratio = samplerate_ratio;
+    src_data.end_of_input = 0;
+
+    // Convert to floats
+    if (!fixToFloats(tsk, src_data, tot_samples)) {
+        return false;
+    }
+
+    // Call samplerate converter
+    int ret = src_process(src_state, &src_data);
+    if (ret) {
+        LOGERR("src_process: " << src_strerror(ret) << endl);
+        return false;
+    }
+
+    { // Tell the world
+        static int cnt;
+        if (cnt++ == 103) {
+            LOGDEB("audioEater:alsa: " 
+                   " qstarg " << qstarg <<
+                   " iqsz " << alsaqueue.qsize() <<
+                   " qsize " << int(qs/bufframes) << 
+                   " ratio " << samplerate_ratio <<
+                   " in " << src_data.input_frames << 
+                   " consumed " << src_data.input_frames_used << 
+                   " out " << src_data.output_frames_gen << endl);
+            cnt = 0;
+        }
+    }
+
+    // New number of samples after conversion. We are going to
+    // copy them back to the audio buffer, and may need to
+    // reallocate it.
+    tot_samples =  src_data.output_frames_gen * tsk->m_chans;
+    needed_bytes = tot_samples * (tsk->m_bits / 8);
+    if (tsk->m_allocbytes < needed_bytes) {
+        tsk->m_allocbytes = needed_bytes;
+        tsk->m_buf = (char *)realloc(tsk->m_buf, tsk->m_allocbytes);
+        if (!tsk->m_buf) {
+            LOGERR("audioEater:alsa: out of memory\n");
+            return false;
+        }
+    }
+
+    if (!floatsToFix(tsk, src_data, tot_samples)) {
+        return false;
+    }
+    return true;
+}
+
 static void *audioEater(void *cls)
 {
     AudioEater::Context *ctxt = (AudioEater::Context*)cls;
@@ -295,7 +582,6 @@ static void *audioEater(void *cls)
 
     qinit = false;
 
-    double samplerate_ratio = 1.0;
     Filter filter;
 
     int src_error = 0;
@@ -307,15 +593,6 @@ static void *audioEater(void *cls)
     size_t src_input_bytes = 0;
     
     alsaqueue.start(1, alsawriter, 0);
-
-    // Integral term. We do not use it at the moment
-    // double it = 0;
-
-    // Number of frames per buffer. This is mostly constant for a
-    // given stream (depends on fe and buffer time, Windows Songcast
-    // buffers are 10mS, so 441 frames at cd q). Recomputed on first
-    // buf, the init is to avoid warnings
-    int bufframes = 441;
 
     while (true) {
         AudioMessage *tsk = 0;
@@ -332,225 +609,33 @@ static void *audioEater(void *cls)
             continue;
         }
 
+        // 1st time: init
         if (src_state == 0) {
             if (!alsa_init(alsadevice, tsk)) {
                 alsaqueue.setTerminateAndWait();
                 queue->workerExit();
                 return (void *)1;
             }
-            // BEST_QUALITY yields approx 25% cpu on a core i7
-            // 4770T. Obviously too much, actually might not be
-            // sustainable (it's almost 100% of 1 cpu)
-            // MEDIUM_QUALITY is around 10%
-            // FASTEST is 4-5%. Given that this measured for the full
-            // process, probably a couple % for the conversion in fact.
-            // Rpi: FASTEST is 30% CPU on a Pi2 with USB
-            // audio. Curiously it's 25-30% on a Pi1 with i2s audio.
-            src_state = src_new(cvt_type, tsk->m_chans, &src_error);
-
-            bufframes = tsk->frames();
+            if (cvt_type != -1) {
+                src_state = src_new(cvt_type, tsk->m_chans, &src_error);
+            } else {
+                src_state = (SRC_STATE *)malloc(1);
+            }
         }
         
-        // Computing the samplerate conversion factor. We want to keep
-        // the queue at its target size to control the delay. The
-        // present hack sort of works but could probably benefit from
-        // a more scientific approach
-
-        // Qsize in frames. This is the variable to control
-        double qs;
-
-        if (qinit) {
-            qs = alsaqueue.qsize() * bufframes + alsadelay();
-            // Error term
-            double qstargframes = qstarg * bufframes;
-            double et =  ((qstargframes - qs) / qstargframes);
-
-            // Integral. Not used, made it worse each time I tried.
-            // This is probably because our command is actually the
-            // derivative of the error? I should try a derivative term
-            // instead?
-            // it += et;
-
-            // Error correction coef
-            double ce = 0.1;
-
-            // Integral coef
-            //double ci = 0.0001;
-
-            // Compute command
-            double adj = ce * et /* + ci * it*/;
-
-            // Also tried a quadratic correction, worse.
-            // double adj = et * ((et < 0) ? -et : et);
-
-            // Computed ratio
-            samplerate_ratio =  1.0 + adj;
-
-            // Limit extension
-            if (samplerate_ratio < 0.9) 
-                samplerate_ratio = 0.9;
-            if (samplerate_ratio > 1.1)
-                samplerate_ratio = 1.1;
-
+        // Process input buffer
+        if (cvt_type != -1) {
+            if (!stretch_buffer(tsk, src_state, src_data, src_input_bytes,
+                               filter)) {
+                alsaqueue.setTerminateAndWait();
+                queue->workerExit();
+                return (void *)1;
+            }
         } else {
-            // Starting up, wait for more info
-            qs = alsaqueue.qsize();
-            samplerate_ratio = 1.0;
-            // it = 0;
+            convert_to16le(tsk);
         }
 
-        // Average the rate value to eliminate fast oscillations
-        samplerate_ratio = filter(samplerate_ratio);
-
-        unsigned int tot_samples = tsk->samples();
-        src_data.input_frames = tsk->frames();
-        size_t needed_bytes = tot_samples * sizeof(float);
-        if (src_input_bytes < needed_bytes) {
-            src_data.data_in = (float *)realloc(src_data.data_in, needed_bytes);
-            src_data.data_out = (float *)realloc(src_data.data_out,
-                                                 2 * needed_bytes);
-            src_data.output_frames = 2 * tot_samples / tsk->m_chans;
-            src_input_bytes = needed_bytes;
-        }
-
-        src_data.src_ratio = samplerate_ratio;
-        src_data.end_of_input = 0;
-        
-        // Data always comes in host order, because this is what we
-        // request from upstream. 24 and 32 bits are untested.
-        switch (tsk->m_bits) {
-        case 16: 
-        {
-            const short *sp = (const short *)tsk->m_buf;
-            for (unsigned int i = 0; i < tot_samples; i++) {
-                src_data.data_in[i] = *sp++;
-            }
-        }
-        break;
-        case 24: 
-        {
-            const unsigned char *icp = (const unsigned char *)tsk->m_buf;
-            int o;
-            unsigned char *ocp = (unsigned char *)&o;
-            for (unsigned int i = 0; i < tot_samples; i++) {
-                ocp[0] = *icp++;
-                ocp[1] = *icp++;
-                ocp[2] = *icp++;
-                ocp[3] = (ocp[2] & 0x80) ? 0xff : 0;
-                src_data.data_in[i] = o;
-            }
-        }
-        break;
-        case 32: 
-        {
-            const int *ip = (const int *)tsk->m_buf;
-            for (unsigned int i = 0; i < tot_samples; i++) {
-                src_data.data_in[i] = *ip++;
-            }
-        }
-        break;
-        default:
-            LOGERR("audioEater:alsa: bad m_bits: " << tsk->m_bits << endl);
-            alsaqueue.setTerminateAndWait();
-            queue->workerExit();
-            return (void *)1;
-        }
-
-        int ret = src_process(src_state, &src_data);
-        if (ret) {
-            LOGERR("src_process: " << src_strerror(ret) << endl);
-            continue;
-        }
-
-        {
-            static int cnt;
-            if (cnt++ == 103) {
-                LOGDEB("audioEater:alsa: " 
-                       " qstarg " << qstarg <<
-                       " iqsz " << alsaqueue.qsize() <<
-                       " qsize " << int(qs/bufframes) << 
-                       " ratio " << samplerate_ratio <<
-                       " in " << src_data.input_frames << 
-                       " consumed " << src_data.input_frames_used << 
-                       " out " << src_data.output_frames_gen << endl);
-                cnt = 0;
-            }
-        }
-
-        // New number of samples after conversion. We are going to
-        // copy them back to the audio buffer, and may need to
-        // reallocate it.
-        tot_samples =  src_data.output_frames_gen * tsk->m_chans;
-        needed_bytes = tot_samples * (tsk->m_bits / 8);
-        if (tsk->m_allocbytes < needed_bytes) {
-            tsk->m_allocbytes = needed_bytes;
-            tsk->m_buf = (char *)realloc(tsk->m_buf, tsk->m_allocbytes);
-            if (!tsk->m_buf) {
-                LOGERR("audioEater:alsa: out of memory\n");
-                alsaqueue.setTerminateAndWait();
-                queue->workerExit();
-                return (void *)1;
-            }
-        }
-
-        // Convert floats buffer into output which is always 16LE for
-        // now. We should probably dither the lsb ?
-	// The libsamplerate output values can overshoot the input range 
-	// (see http://www.mega-nerd.com/SRC/faq.html#Q001), so we take care 
-	// to clip the values.
-        {
-            short *sp = (short *)tsk->m_buf;
-            switch (tsk->m_bits) {
-            case 16:
-            {
-                for (unsigned int i = 0; i < tot_samples; i++) {
-                    int v = src_data.data_out[i];
-                    if (v > 32767) {
-                        v = 32767;
-                    } else if (v < -32768) {
-                        v = -32768;
-                    }
-                    *sp++ = BSWAP16(short(v));
-                }
-            }
-            break;
-            case 24:
-            {
-                for (unsigned int i = 0; i < tot_samples; i++) {
-                    int v = src_data.data_out[i];
-                    if (v > (1 << 23) - 1) {
-                        v = (1 << 23) - 1;
-                    } else if (v < -(1 << 23)) {
-                        v = -(1 << 23);
-                    }
-                    *sp++ = BSWAP16(short(v >> 8));
-                }
-            }
-            break;
-            case 32:
-            {
-                for (unsigned int i = 0; i < tot_samples; i++) {
-                    float& f = src_data.data_out[i];
-                    int v = f;
-                    if (f > 0 && v < 0) {
-                        v = unsigned(1 << 31) - 1;
-                    } else if (f < 0 && v > 0) {
-                        v = -unsigned(1 << 31);
-                    }
-                    *sp++ = BSWAP16(short(v >> 16));
-                }
-            }
-            break;
-            default:
-                LOGERR("audioEater:alsa: bad m_bits: " << tsk->m_bits << endl);
-                alsaqueue.setTerminateAndWait();
-                queue->workerExit();
-                return (void *)1;
-            }
-            tsk->m_bytes = (char *)sp - tsk->m_buf;
-        }
-        tsk->m_bits = 16;
-
+        // Send data on its way
         if (!alsaqueue.put(tsk)) {
             LOGERR("alsaEater: queue put failed\n");
             queue->workerExit();
