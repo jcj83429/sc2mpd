@@ -335,7 +335,8 @@ static double compute_ratio(double& samplerate_ratio, int bufframes,
     }
 
     // Average the rate value to eliminate fast oscillations
-    return filter(samplerate_ratio);
+    samplerate_ratio = filter(samplerate_ratio);
+    return qs;
 }
 
 // Convert ints input buffer into floats for libsamplerate processing
@@ -498,7 +499,8 @@ bool stretch_buffer(AudioMessage *tsk,
     unsigned int tot_samples = tsk->samples();
 
     // Compute sample rate ratio, and return current qsize in
-    // frames. This is the variable which we control.
+    // frames. This is the variable which we control. Note that this
+    // takes a non-const ret to samplerate_ration and changes it
     double qs = compute_ratio(samplerate_ratio, bufframes, filter);
 
     src_data.input_frames = tsk->frames();
