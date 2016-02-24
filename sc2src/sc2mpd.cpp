@@ -469,13 +469,14 @@ int CDECL main(int aArgc, char* aArgv[])
     parser.AddOption(&optionDevice);
 
 #ifdef WITH_WAVSC2
-    OptionString optionWav("-w", "--wav", Brn(""), 
+    OptionString optionWav("-w", "--wav somefile.wav", Brn(""), 
                            "Test audio with wav file instead of sender");
     parser.AddOption(&optionWav);
 #endif
 
     if (!parser.Parse(aArgc, aArgv)) {
-        return (1);
+        cerr << "Bad options, exiting\n";
+        return 1;
     }
 
     string uconfigfile = (const char *)optionConfig.Value().Ptr();
