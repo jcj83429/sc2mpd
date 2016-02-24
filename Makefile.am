@@ -20,6 +20,12 @@ AM_CPPFLAGS = -DDEBUG -g -Wall \
             -I$(TOPOH)ohNetGenerated/Build/Include/ \
             -I$(TOPOH)ohTopology/build/Include/  \
             -I$(TOPSC)
+if WAVSC2
+AM_CPPFLAGS += \
+            -I$(top_srcdir)/mpd2src \
+            -I$(top_srcdir)/sc2src \
+            -DWITH_WAVSC2
+endif
 
 AM_CXXFLAGS = -std=c++0x
 
@@ -56,7 +62,15 @@ sc2mpd_SOURCES = \
      sc2src/wav.cpp \
      sc2src/wav.h \
      sc2src/workqueue.h
-     
+
+if WAVSC2
+sc2mpd_SOURCES += \
+     mpd2src/openaudio.cpp \
+     mpd2src/wavreader.cpp \
+     mpd2src/fiforeader.cpp \
+     mpd2src/stringtotokens.cpp
+endif
+
 OTHEROMP2 = $(TOPSCO)/Ohm.o $(TOPSCO)/OhmMsg.o $(TOPSCO)/OhmSocket.o \
              $(TOPSCO)/OhmSender.o \
              $(TOPOH)ohNetGenerated/$(OBJIPATH)DvAvOpenhomeOrgSender1.o

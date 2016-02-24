@@ -41,6 +41,11 @@ Unless otherwise stated, all code in this project is licensed under the 2-clause
 #include "conftree.h"
 #include "chrono.h"
 
+#ifdef WITH_WAVSC2
+#include "openaudio.h"
+#include "audioreader.h"
+#endif
+
 #include <vector>
 #include <stdio.h>
 #include <iostream>
@@ -356,6 +361,83 @@ void OhmReceiverDriver::Process(OhmMsgMetatext& aMsg)
            " METATEXT " << metatext.CString() << endl);
 }
 
+#ifdef WITH_WAVSC2
+static int playWav(const string& wavfile, AudioEater *eater,
+                   AudioEater::Context *ctxt)
+{
+    audioqueue.start(1, eater->worker, ctxt);
+
+    AudioReader *audio = openAudio(wavfile, "", true);
+
+    if (!audio || !audio->open() || audio->bytesPerSample() == 0 ||
+        audio->numChannels() == 0) {
+        cerr << "Audio file open failed" << endl;
+        return 1;
+    }
+    LOGDEB("sample rate:        " << audio->sampleRate() << endl);
+    LOGDEB("sample size:        " << audio->bytesPerSample() << endl);
+    LOGDEB("channels:           " << audio->numChannels() << endl);
+
+    size_t packetBytes = 441 * 16 *2;
+    while (true) {
+        const unsigned char *ibuf = audio->data(packetBytes);
+        if (ibuf == 0) {
+            return 1;
+        }
+        // We allocate a bit more space to avoir reallocations in the resampler
+        unsigned int allocbytes = packetBytes + 100;
+        char *buf = (char *)malloc(allocbytes);
+        if (buf == 0) {
+            LOGERR("playWav: can't allocate " << allocbytes << " bytes\n");
+            return 1;
+        }
+
+        // Songcast data is always msb-first.  Convert to desired order:
+        // depends on what downstream wants, and just as well we do it
+        // here because we copy the buf anyway.
+        bool needswap = false;
+        switch (eater->input_border) {
+        case AudioEater::BO_MSB:
+            break;
+        case AudioEater::BO_LSB:
+            needswap = true;
+            break;
+        case AudioEater::BO_HOST:
+#ifdef WORDS_BIGENDIAN
+            needswap = false;
+#else
+            needswap = true;
+#endif
+            break;
+        }
+
+        int bitDepth = 8 * audio->bytesPerSample();
+        if (needswap) {
+            copyswap((unsigned char *)buf, ibuf, packetBytes, bitDepth);
+        } else {
+            memcpy(buf, ibuf, packetBytes);
+        }
+
+        // The constructor wants the number of frames as input (frame
+        // being all samples at given timepoint, typically 2 for
+        // stereo)
+        int frames = packetBytes /
+            (audio->bytesPerSample() * audio->numChannels());
+        AudioMessage *ap = new
+            AudioMessage(bitDepth, audio->numChannels(), frames,
+                         audio->sampleRate(), buf, allocbytes);
+
+        // There is nothing special we can do if put fails: no way to
+        // return status. Should we just exit ?
+        if (!audioqueue.put(ap, false)) {
+            LOGERR("sc2mpd: queue dead: exiting\n");
+            return 1;
+        }
+    }
+    return 0;
+}
+#endif
+
 int CDECL main(int aArgc, char* aArgv[])
 {
     string logfilename;
@@ -386,22 +468,15 @@ int CDECL main(int aArgc, char* aArgv[])
                             "http stream");
     parser.AddOption(&optionDevice);
 
+#ifdef WITH_WAVSC2
+    OptionString optionWav("-w", "--wav", Brn(""), 
+                           "Test audio with wav file instead of sender");
+    parser.AddOption(&optionWav);
+#endif
+
     if (!parser.Parse(aArgc, aArgv)) {
         return (1);
     }
-
-    InitialisationParams* initParams = InitialisationParams::Create();
-
-    Library* lib = new Library(initParams);
-
-    std::vector<NetworkAdapter*>* subnetList = lib->CreateSubnetList();
-    TIpAddress subnet = (*subnetList)[optionAdapter.Value()]->Subnet();
-    TIpAddress adapter = (*subnetList)[optionAdapter.Value()]->Address();
-    Library::DestroySubnetList(subnetList);
-
-
-    TUint ttl = optionTtl.Value();
-    Brhz uri(optionUri.Value());
 
     string uconfigfile = (const char *)optionConfig.Value().Ptr();
 
@@ -427,12 +502,37 @@ int CDECL main(int aArgc, char* aArgv[])
     }
     Logger::getTheLog("")->setLogLevel(Logger::LogLevel(loglevel));
 
+    AudioEater::Context *ctxt = new AudioEater::Context(&audioqueue);
+    ctxt->config = &config;
+
+#ifdef WITH_WAVSC2
+    string wavname(Brhz(optionWav.Value()).CString());
+    if (!wavname.empty()) {
+        string value;
+        if (!config.get("sccvttype", value) || 
+            value.compare("NONE")) {
+            cerr << "Wav input play test. NEEDS sccvttype == NONE\n";
+            return 1;
+        }
+        return playWav(wavname, &alsaAudioEater, ctxt);
+    }
+#endif
+
+    InitialisationParams* initParams = InitialisationParams::Create();
+
+    Library* lib = new Library(initParams);
+
+    std::vector<NetworkAdapter*>* subnetList = lib->CreateSubnetList();
+    TIpAddress subnet = (*subnetList)[optionAdapter.Value()]->Subnet();
+    TIpAddress adapter = (*subnetList)[optionAdapter.Value()]->Address();
+    Library::DestroySubnetList(subnetList);
+
+    TUint ttl = optionTtl.Value();
+    Brhz uri(optionUri.Value());
+
     LOGINF("scmpdcli: using subnet " << (subnet & 0xff) << "." << 
            ((subnet >> 8) & 0xff) << "." << ((subnet >> 16) & 0xff) << "." <<
            ((subnet >> 24) & 0xff) << endl);
-
-    AudioEater::Context *ctxt = new AudioEater::Context(&audioqueue);
-    ctxt->config = &config;
 
     OhmReceiverDriver* driver = 
         new OhmReceiverDriver(optionDevice.Value() ? 

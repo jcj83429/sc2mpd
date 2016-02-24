@@ -21,6 +21,13 @@ fi
 TOPOH="$withOH"
 AC_SUBST(TOPOH)                     
 
+# Enable wav-reading test code in sc2mpd. Devel only
+AC_ARG_ENABLE(wavsc2,
+    AC_HELP_STRING([--enable-wavsc2],
+    [Enable wav-reading code in sc2mpd.]),
+        wavsc2Enabled=$enableval, wavsc2Enabled=no)
+AM_CONDITIONAL(WAVSC2, [test X$wavsc2Enabled = Xyes])
+
 AC_CHECK_HEADERS([byteswap.h])
 
 AC_CHECK_LIB([pthread], [pthread_create], , [lpthread=no])
