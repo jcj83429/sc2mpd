@@ -46,6 +46,11 @@ public:
     unsigned int frames() {
         return samples() / m_chans;
     }
+    // Convert frame count into byte count
+    unsigned int frames_to_bytes(unsigned int frames) {
+        return frames * m_chans * (m_bits/8);
+    }
+
     unsigned int m_bits;
     unsigned int m_chans;
     unsigned int m_freq;

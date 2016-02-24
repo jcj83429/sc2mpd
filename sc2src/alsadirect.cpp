@@ -64,6 +64,43 @@ static bool qinit = false;
 
 static snd_pcm_t *pcm;
 
+// From MPD recovery code
+static int alsa_recover(snd_pcm_t *pcm, int err)
+{
+    if (err == -EPIPE) {
+        LOGDEB("Underrun on ALSA device\n");
+    } else if (err == -ESTRPIPE) {
+        LOGDEB("ALSA device was suspended\n");
+    }
+
+    switch (snd_pcm_state(pcm)) {
+    case SND_PCM_STATE_PAUSED:
+        err = snd_pcm_pause(pcm, /* disable */ 0);
+        break;
+    case SND_PCM_STATE_SUSPENDED:
+        err = snd_pcm_resume(pcm);
+        if (err == -EAGAIN)
+            return 0;
+        /* fall-through to snd_pcm_prepare: */
+    case SND_PCM_STATE_SETUP:
+    case SND_PCM_STATE_XRUN:
+        //ad->period_position = 0;
+        err = snd_pcm_prepare(pcm);
+        break;
+    case SND_PCM_STATE_DISCONNECTED:
+        break;
+	/* this is no error, so just keep running */
+    case SND_PCM_STATE_RUNNING:
+        err = 0;
+        break;
+    default:
+        /* unknown state, do nothing */
+        break;
+    }
+
+    return err;
+}
+
 // A period is data processed between interrupts. When playing,
 // there is one period belonging to the hardware and normally
 // others that the software can fill up. The minimum reasonable is
@@ -97,19 +134,39 @@ static void *alsawriter(void *p)
             alsaqueue.workerExit();
             return (void*)1;
         }
-        // Bufs 
+
         snd_pcm_uframes_t frames = tsk->frames();
-        snd_pcm_sframes_t ret =  snd_pcm_writei(pcm, tsk->m_buf, frames);
-        if (ret != int(frames)) {
-            LOGERR("snd-cm_writei(" << frames <<" frames) failed: ret: " <<
-                   ret << endl);
-            if (ret < 0) {
-                qinit = false;
-                snd_pcm_prepare(pcm);
+        char *buf = tsk->m_buf;
+        // This loop is copied from the alsa sample, but it should not
+        // be necessary, in synchronous mode, alsa is supposed to
+        // perform complete writes except for errors or interrupts
+        while (frames > 0) {
+            snd_pcm_sframes_t ret =  snd_pcm_writei(pcm, tsk->m_buf, frames);
+            if (ret != int(frames)) {
+                LOGERR("snd_pcm_writei(" << frames <<" frames) failed: ret: " <<
+                       ret << endl);
+            } else {
+                qinit = true;
             }
-        } else {
-            qinit = true;
-        }
+            if (ret == -EAGAIN) {
+                LOGDEB("alsawriter: EAGAIN\n");
+                continue;
+            }
+            if (ret <= 0) {
+                if (alsa_recover(pcm, ret) < 0) {
+                    LOGERR("alsawriter: write and recovery failed: " << ret
+                           << endl);
+                    alsaqueue.workerExit();
+                    return (void*)1;
+                }
+                qinit = false;
+                break;
+            }
+            unsigned int bytes = tsk->frames_to_bytes(ret);
+            buf += bytes;
+            frames -= ret;
+        } 
+
         delete tsk;
     }
 }
@@ -162,7 +219,11 @@ static bool alsa_init(const string& dev, AudioMessage *tsk)
                                                &actual_rate, &dir)) < 0) {
         goto error;
     }
-
+    if (actual_rate != tsk->m_freq) {
+        LOGERR("snd_pcm_hw_params_set_rate_near: got actual rate "
+               << actual_rate << endl);
+        goto error;
+    }
     unsigned int periodsmin, periodsmax;
     snd_pcm_hw_params_get_periods_min(hwparams, &periodsmin, &dir);
     snd_pcm_hw_params_get_periods_max(hwparams, &periodsmax, &dir);
@@ -275,7 +336,7 @@ static int src_cvt_type(ConfSimple *config)
             tp = int(lval);
         } else {
             LOGERR("Invalid converter type [" << value << 
-                   "] using SRCC_SINC_FASTEST" << endl);
+                   "] using SRC_SINC_FASTEST" << endl);
         }
     }
     return tp;
