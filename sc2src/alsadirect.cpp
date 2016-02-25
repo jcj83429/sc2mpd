@@ -105,17 +105,20 @@ static int alsa_recover(snd_pcm_t *pcm, int err)
 // there is one period belonging to the hardware and normally
 // others that the software can fill up. The minimum reasonable is
 // 2 periods (one for us, one for the hardware), which we try to
-// use as this gives minimum latency while being workable. But we
-// have to accept that the driver may have other constraints.  Not
-// too sure why we bother actually, because we don't use the
-// resulting config at all while writing...
-// In any case, if we get what we ask for, we have an in-driver
-// latency of between 16KBytes and 32KBytes, 4K to 8K frames (16:2),
-// 200mS at 44.1 Khz
+// use as this gives minimum latency while being workable.
 //
-// These may be changed depending on local alsa caps:
-static snd_pcm_uframes_t periodsize = 16384; /* Periodsize (bytes) */
-static unsigned int periods = 2;       /* Number of periods */
+// We try to control this so that the delay is constant in all
+// instances, independantly of the local hardware defaults. But we
+// have to accept that the driver may have other constraints.
+//
+// It appears that the min buffer time on common hardware is about 200
+// mS, so that it does not work to ask for much less.
+//
+static unsigned int buffer_time = 200000;
+static unsigned int period_time = 50000;
+// Set after initializing the driver
+static snd_pcm_uframes_t periodframes;
+static snd_pcm_uframes_t bufferframes;
 
 static void *alsawriter(void *p)
 {
@@ -176,7 +179,6 @@ static bool alsa_init(const string& dev, AudioMessage *tsk)
     snd_pcm_hw_params_t *hwparams;
     int err;
     const char *cmd = "";
-    int dir=0;
     unsigned int actual_rate = tsk->m_freq;
 
     if ((err = snd_pcm_open(&pcm, dev.c_str(), 
@@ -204,19 +206,18 @@ static bool alsa_init(const string& dev, AudioMessage *tsk)
     }
 
     cmd = "snd_pcm_hw_params_set_format";
-    if ((err = 
-         snd_pcm_hw_params_set_format(pcm, hwparams, 
-                                      SND_PCM_FORMAT_S16_LE)) < 0) {
+    if ((err = snd_pcm_hw_params_set_format(pcm, hwparams, 
+                                            SND_PCM_FORMAT_S16_LE)) < 0) {
         goto error;
     }
     cmd = "snd_pcm_hw_params_set_channels";
-    if ((err = snd_pcm_hw_params_set_channels(pcm, hwparams, 
+    if ((err = snd_pcm_hw_params_set_channels(pcm, hwparams,
                                               tsk->m_chans)) < 0) {
         goto error;
     }
     cmd = "snd_pcm_hw_params_set_rate_near";
     if ((err = snd_pcm_hw_params_set_rate_near(pcm, hwparams, 
-                                               &actual_rate, &dir)) < 0) {
+                                               &actual_rate, 0)) < 0) {
         goto error;
     }
     if (actual_rate != tsk->m_freq) {
@@ -225,40 +226,75 @@ static bool alsa_init(const string& dev, AudioMessage *tsk)
         goto error;
     }
     unsigned int periodsmin, periodsmax;
-    snd_pcm_hw_params_get_periods_min(hwparams, &periodsmin, &dir);
-    snd_pcm_hw_params_get_periods_max(hwparams, &periodsmax, &dir);
-    LOGDEB("Alsa: periods min " << periodsmin << 
-           " max " << periodsmax << endl);
-    periods = 2;
-    if (periods < periodsmin || periods > periodsmax)
-        periods = periodsmin;
-    cmd = "snd_pcm_hw_params_set_periods";
-    if ((err = snd_pcm_hw_params_set_periods(pcm, hwparams, periods, 0)) < 0) {
-        goto error;
-    }
-    snd_pcm_uframes_t bsmax, bsmin;
+    snd_pcm_hw_params_get_periods_min(hwparams, &periodsmin, 0);
+    snd_pcm_hw_params_get_periods_max(hwparams, &periodsmax, 0);
+    snd_pcm_uframes_t bsmax, bsmin, prmin, prmax;
     snd_pcm_hw_params_get_buffer_size_min(hwparams, &bsmin);
     snd_pcm_hw_params_get_buffer_size_max(hwparams, &bsmax);
-    unsigned int bufferframes;
-    bufferframes = periodsize * periods / (2*tsk->m_chans);
-    if (bufferframes < bsmin || bufferframes > bsmax) {
-        bufferframes = bsmin;
-        periodsize = bufferframes / periods * (2 * tsk->m_chans);
-    }
-    cmd = "snd_pcm_hw_params_set_buffer_size";
-    LOGDEB("Alsa: set buffer_size: min " << bsmin << " max " << bsmax << 
-           " val " << bufferframes << endl);
-    if ((err = snd_pcm_hw_params_set_buffer_size(pcm, hwparams, bufferframes)) 
+    snd_pcm_hw_params_get_period_size_min(hwparams, &prmin, 0);
+    snd_pcm_hw_params_get_period_size_max(hwparams, &prmax, 0);
+    LOGDEB("Alsa: periodsmin " << periodsmin << " periodsmax " << periodsmax <<
+           " bsminsz " << bsmin << " bsmaxsz " << bsmax << 
+           " prminsz " << prmin << " prmaxsz " << prmax << endl);
+
+    cmd = "snd_pcm_hw_params_set_buffer_time_near";
+    unsigned int buftimereq;
+    buftimereq = buffer_time;
+    if ((err = snd_pcm_hw_params_set_buffer_time_near(pcm, hwparams,
+                                                      &buffer_time, 0)) 
         < 0) {
         goto error;
     }
-  
+    LOGDEB("Alsa: set buffer_time_near: asked " <<buftimereq << " got " <<
+           buffer_time << endl);
+
+    cmd = "snd_pcm_hw_params_set_period_time_near";
+    buftimereq = period_time;
+    if ((err = snd_pcm_hw_params_set_period_time_near(pcm, hwparams,
+                                                      &period_time, 0)) 
+        < 0) {
+        goto error;
+    }
+    LOGDEB("Alsa: set_period_time_near: asked " << buftimereq << " got " <<
+           period_time << endl);
+
+    snd_pcm_hw_params_get_period_size(hwparams, &periodframes, 0);
+    snd_pcm_hw_params_get_buffer_size(hwparams, &bufferframes);
+    LOGDEB("Alsa: bufferframes " << bufferframes << " periodframes " <<
+           periodframes << endl);
+    
     cmd = "snd_pcm_hw_params";
     if ((err = snd_pcm_hw_params(pcm, hwparams)) < 0) {
         goto error;
     }
         
     snd_pcm_hw_params_free(hwparams);
+
+    /* configure SW params */
+    snd_pcm_sw_params_t *swparams;
+    snd_pcm_sw_params_alloca(&swparams);
+
+    cmd = "snd_pcm_sw_params_current";
+    err = snd_pcm_sw_params_current(pcm, swparams);
+    if (err < 0)
+        goto error;
+
+    cmd = "snd_pcm_sw_params_set_start_threshold";
+    err = snd_pcm_sw_params_set_start_threshold(pcm, swparams,
+                                                bufferframes - periodframes);
+    if (err < 0)
+        goto error;
+
+    cmd = "snd_pcm_sw_params_set_avail_min";
+    err = snd_pcm_sw_params_set_avail_min(pcm, swparams, periodframes);
+    if (err < 0)
+        goto error;
+
+    cmd = "snd_pcm_sw_params";
+    err = snd_pcm_sw_params(pcm, swparams);
+    if (err < 0)
+        goto error;
+
     return true;
 
 error:
