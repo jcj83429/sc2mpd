@@ -48,7 +48,7 @@ using namespace std;
 #endif
 
 // The queue for audio blocks ready for alsa. This is the maximum size
-// before enqueuing blocks
+// before the upstream task blocks
 static const unsigned int qs_hi = 100;
 
 // Queue size target including alsa buffers. There is no particular
@@ -130,9 +130,9 @@ static void *alsawriter(void *p)
                 return (void *)1;
             }
         }
+
         AudioMessage *tsk = 0;
-        size_t qsz;
-        if (!alsaqueue.take(&tsk, &qsz)) {
+        if (!alsaqueue.take(&tsk)) {
             // TBD: reset alsa?
             alsaqueue.workerExit();
             return (void*)1;
@@ -144,6 +144,8 @@ static void *alsawriter(void *p)
         // be necessary, in synchronous mode, alsa is supposed to
         // perform complete writes except for errors or interrupts
         while (frames > 0) {
+//            LOGDEB("alsawriter: avail frames " << snd_pcm_avail(pcm) <<
+//                   " writing " << frames << endl);
             snd_pcm_sframes_t ret =  snd_pcm_writei(pcm, tsk->m_buf, frames);
             if (ret != int(frames)) {
                 LOGERR("snd_pcm_writei(" << frames <<" frames) failed: ret: " <<
@@ -165,8 +167,8 @@ static void *alsawriter(void *p)
                 qinit = false;
                 break;
             }
-            unsigned int bytes = tsk->frames_to_bytes(ret);
-            buf += bytes;
+
+            buf += tsk->frames_to_bytes(ret);
             frames -= ret;
         } 
 
@@ -176,10 +178,8 @@ static void *alsawriter(void *p)
 
 static bool alsa_init(const string& dev, AudioMessage *tsk)
 {
-    snd_pcm_hw_params_t *hwparams;
     int err;
     const char *cmd = "";
-    unsigned int actual_rate = tsk->m_freq;
 
     if ((err = snd_pcm_open(&pcm, dev.c_str(), 
                             SND_PCM_STREAM_PLAYBACK, 0)) < 0) {
@@ -187,12 +187,9 @@ static bool alsa_init(const string& dev, AudioMessage *tsk)
                snd_strerror(err) << endl);
         return false;;
     }
-    if ((err = snd_pcm_hw_params_malloc(&hwparams)) < 0) {
-        LOGERR("alsa_init: snd_pcm_hw_params_malloc " << 
-               snd_strerror(err) << endl);
-        snd_pcm_close(pcm);
-        return false;
-    }
+
+    snd_pcm_hw_params_t *hwparams;
+    snd_pcm_hw_params_alloca(&hwparams);
 
     cmd = "snd_pcm_hw_params_any";
     if ((err = snd_pcm_hw_params_any(pcm, hwparams)) < 0) {
@@ -216,6 +213,8 @@ static bool alsa_init(const string& dev, AudioMessage *tsk)
         goto error;
     }
     cmd = "snd_pcm_hw_params_set_rate_near";
+    unsigned int actual_rate;
+    actual_rate = tsk->m_freq;
     if ((err = snd_pcm_hw_params_set_rate_near(pcm, hwparams, 
                                                &actual_rate, 0)) < 0) {
         goto error;
@@ -225,6 +224,8 @@ static bool alsa_init(const string& dev, AudioMessage *tsk)
                << actual_rate << endl);
         goto error;
     }
+
+    // Note: we don't use these values, get them just for information purposes
     unsigned int periodsmin, periodsmax;
     snd_pcm_hw_params_get_periods_min(hwparams, &periodsmin, 0);
     snd_pcm_hw_params_get_periods_max(hwparams, &periodsmax, 0);
@@ -241,18 +242,16 @@ static bool alsa_init(const string& dev, AudioMessage *tsk)
     unsigned int buftimereq;
     buftimereq = buffer_time;
     if ((err = snd_pcm_hw_params_set_buffer_time_near(pcm, hwparams,
-                                                      &buffer_time, 0)) 
-        < 0) {
+                                                      &buffer_time, 0)) < 0) {
         goto error;
     }
-    LOGDEB("Alsa: set buffer_time_near: asked " <<buftimereq << " got " <<
+    LOGDEB("Alsa: set buffer_time_near: asked " << buftimereq << " got " <<
            buffer_time << endl);
 
     cmd = "snd_pcm_hw_params_set_period_time_near";
     buftimereq = period_time;
     if ((err = snd_pcm_hw_params_set_period_time_near(pcm, hwparams,
-                                                      &period_time, 0)) 
-        < 0) {
+                                                      &period_time, 0)) < 0) {
         goto error;
     }
     LOGDEB("Alsa: set_period_time_near: asked " << buftimereq << " got " <<
@@ -268,8 +267,6 @@ static bool alsa_init(const string& dev, AudioMessage *tsk)
         goto error;
     }
         
-    snd_pcm_hw_params_free(hwparams);
-
     /* configure SW params */
     snd_pcm_sw_params_t *swparams;
     snd_pcm_sw_params_alloca(&swparams);
@@ -299,7 +296,6 @@ static bool alsa_init(const string& dev, AudioMessage *tsk)
 
 error:
     LOGERR("alsa_init: " << cmd << " error:" << snd_strerror(err) << endl);
-    snd_pcm_hw_params_free(hwparams);
     return false;
 }
 
