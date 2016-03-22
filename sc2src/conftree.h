@@ -49,18 +49,21 @@
  * (useful to have central/personal config files)
  */
 
-#include <time.h>                       // for time_t
-#include <algorithm>                    // for sort, unique
-#include <map>                          // for map, etc
-#include <string>                       // for string, operator==, etc
-#include <vector>                       // for vector, etc
+#include <time.h>
+#include <algorithm>
+#include <map>
+#include <string>
+#include <vector>
 
 // rh7.3 likes iostream better...
 #if defined(__GNUC__) && __GNUC__ < 3
 #include <iostream>
 #else
-#include <istream>                      // for istream, ostream
+#include <istream>
+#include <ostream>
 #endif
+
+#include "pathut.h"
 
 using std::string;
 using std::vector;
@@ -83,7 +86,7 @@ public:
 };
 
 /**
- * Virtual base class used to define an interface mostly useful for testing, + some utility functions
+ * Virtual base class used to define an interface mostly useful for testing
  */
 class ConfNull {
 public:
@@ -103,11 +106,6 @@ public:
     virtual vector<string> getSubKeys(bool) const = 0;
     virtual bool holdWrites(bool) = 0;
     virtual bool sourceChanged() const = 0;
-    static void path_catslash(string& s);
-    static string path_cat(const string& s1, const string& s2);
-    static string path_home();
-    static void trimstring(string& s, const char *ws = " \t");
-    static string path_tildexpand(const string& s);
 };
 
 /**
@@ -226,6 +224,9 @@ public:
     virtual vector<string> getSubKeys(bool) const {
         return getSubKeys();
     }
+    virtual vector<string> getSubKeys_unsorted(bool = false) const {
+        return m_subkeys_unsorted;
+    }
     virtual vector<string> getSubKeys() const;
     /** Test for subkey existence */
     virtual bool hasSubKey(const string& sk) const {
@@ -274,6 +275,7 @@ private:
     // Configuration data submaps (one per subkey, the main data has a
     // null subkey)
     map<string, map<string, string> > m_submaps;
+    vector<string> m_subkeys_unsorted;
     // Presentation data. We keep the comments, empty lines and
     // variable and subkey ordering information in there (for
     // rewriting the file while keeping hand-edited information)
@@ -392,14 +394,21 @@ public:
         return false;
     }
 
-    virtual int get(const string& name, string& value, const string& sk) const {
+    virtual int get(const string& name, string& value, const string& sk,
+                    bool shallow) const {
         typename vector<T*>::const_iterator it;
         for (it = m_confs.begin(); it != m_confs.end(); it++) {
             if ((*it)->get(name, value, sk)) {
                 return true;
             }
+            if (shallow) {
+                break;
+            }
         }
         return false;
+    }
+    virtual int get(const string& name, string& value, const string& sk) const {
+        return get(name, value, sk, false);
     }
 
     virtual bool hasNameAnywhere(const string& nm) const {

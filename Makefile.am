@@ -56,9 +56,13 @@ sc2mpd_SOURCES = \
      sc2src/httpgate.cpp \
      sc2src/log.cpp \
      sc2src/log.h \
+     sc2src/pathut.cpp \
+     sc2src/pathut.h \
      sc2src/ptmutex.h \
      sc2src/rcvqueue.h \
      sc2src/sc2mpd.cpp \
+     sc2src/smallut.cpp \
+     sc2src/smallut.h \
      sc2src/wav.cpp \
      sc2src/wav.h \
      sc2src/workqueue.h

@@ -1,4 +1,4 @@
-/* Copyright (C) 2003 J.F.Dockes
+/* Copyright (C) 2003-2016 J.F.Dockes
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
  *   the Free Software Foundation; either version 2 of the License, or
@@ -16,20 +16,34 @@
  */
 #ifndef TEST_CONFTREE
 
+#ifdef BUILDING_RECOLL
+#include "autoconfig.h"
+#else
+#include "config.h"
+#endif
+
 #include "conftree.h"
 
-#include <fnmatch.h>                    // for fnmatch
-#include <stdlib.h>                     // for abort
-#include <sys/stat.h>                   // for stat, st_mtime
-#include <unistd.h>                     // for access
-#include <pwd.h>                        // for getpwnam, getpwuid, passwd
+#include <ctype.h>
+#include <fnmatch.h>
+#ifdef _WIN32
+#include "safesysstat.h"
+#else
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <pwd.h>
+#endif
 
-#include <algorithm>                    // for find
-#include <cstring>                      // for strlen
-#include <fstream>                      // for ifstream, ofstream
-#include <iostream>                     // for cerr, cout
-#include <sstream>                      // for stringstream
-#include <utility>                      // for pair
+#include <algorithm>
+#include <cstring>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <utility>
+
+#include "pathut.h"
+#include "smallut.h"
 
 using namespace std;
 
@@ -40,93 +54,19 @@ using namespace std;
 #define LOGDEB(X)
 #endif
 
-#ifndef MIN
-#define MIN(A,B) ((A) < (B) ? (A) : (B))
-#endif
-
-#define LL 2048
-
-string ConfNull::path_home()
-{
-    uid_t uid = getuid();
-
-    struct passwd *entry = getpwuid(uid);
-    if (entry == 0) {
-        const char *cp = getenv("HOME");
-        if (cp) {
-            return cp;
-        } else {
-            return "/";
-        }
-    }
-
-    string homedir = entry->pw_dir;
-    path_catslash(homedir);
-    return homedir;
-}
-
-void ConfNull::path_catslash(string& s)
-{
-    if (s.empty() || s[s.length() - 1] != '/') {
-        s += '/';
-    }
-}
-
-string ConfNull::path_cat(const string& s1, const string& s2)
-{
-    string res = s1;
-    path_catslash(res);
-    res +=  s2;
-    return res;
-}
-
-string ConfNull::path_tildexpand(const string& s)
-{
-    if (s.empty() || s[0] != '~') {
-        return s;
-    }
-    string o = s;
-    if (s.length() == 1) {
-        o.replace(0, 1, path_home());
-    } else if (s[1] == '/') {
-        o.replace(0, 2, path_home());
-    } else {
-        string::size_type pos = s.find('/');
-        int l = (pos == string::npos) ? s.length() - 1 : pos - 1;
-        struct passwd *entry = getpwnam(s.substr(1, l).c_str());
-        if (entry) {
-            o.replace(0, l + 1, entry->pw_dir);
-        }
-    }
-    return o;
-}
-void ConfNull::trimstring(string& s, const char *ws)
-{
-    string::size_type pos = s.find_first_not_of(ws);
-    if (pos == string::npos) {
-        s.clear();
-        return;
-    }
-    s.replace(0, pos, string());
-
-    pos = s.find_last_not_of(ws);
-    if (pos != string::npos && pos != s.length() - 1) {
-        s.replace(pos + 1, string::npos, string());
-    }
-}
-
 void ConfSimple::parseinput(istream& input)
 {
     string submapkey;
-    char cline[LL];
+    string cline;
     bool appending = false;
     string line;
     bool eof = false;
 
     for (;;) {
-        cline[0] = 0;
-        input.getline(cline, LL - 1);
-        LOGDEB((stderr, "Parse:line: [%s] status %d\n", cline, int(status)));
+        cline.clear();
+        std::getline(input, cline);
+        LOGDEB((stderr, "Parse:line: [%s] status %d\n",
+                cline.c_str(), int(status)));
         if (!input.good()) {
             if (input.bad()) {
                 LOGDEB((stderr, "Parse: input.bad()\n"));
@@ -141,10 +81,11 @@ void ConfSimple::parseinput(istream& input)
         }
 
         {
-            int ll = strlen(cline);
-            while (ll > 0 && (cline[ll - 1] == '\n' || cline[ll - 1] == '\r')) {
-                cline[ll - 1] = 0;
-                ll--;
+            string::size_type pos = cline.find_last_not_of("\n\r");
+            if (pos == string::npos) {
+                cline.clear();
+            } else if (pos != cline.length() - 1) {
+                cline.erase(pos + 1);
             }
         }
 
@@ -178,6 +119,8 @@ void ConfSimple::parseinput(istream& input)
             } else {
                 submapkey = line;
             }
+            m_subkeys_unsorted.push_back(submapkey);
+
             // No need for adding sk to order, will be done with first
             // variable insert. Also means that empty section are
             // expandable (won't be output when rewriting)
@@ -247,7 +190,7 @@ ConfSimple::ConfSimple(const char *fname, int readonly, bool tildexp)
         // It seems that there is no separate 'create if not exists'
         // open flag. Have to truncate to create, but dont want to do
         // this to an existing file !
-        if (access(fname, 0) < 0) {
+        if (!path_exists(fname)) {
             mode |= ios::trunc;
         }
         input.open(fname, mode);
@@ -334,29 +277,45 @@ int ConfSimple::get(const string& nm, string& value, const string& sk) const
 }
 
 // Appropriately output a subkey (nm=="") or variable line.
-// Splits long lines
+// We can't make any assumption about the data except that it does not
+// contain line breaks.
+// Avoid long lines if possible (for hand-editing)
+// We used to break at arbitrary places, but this was ennoying for
+// files with pure UTF-8 encoding (some files can be binary anyway),
+// because it made later editing difficult, as the file would no
+// longer have a valid encoding.
+// Any ASCII byte would be a safe break point for utf-8, but could
+// break some other encoding with, e.g. escape sequences? So break at
+// whitespace (is this safe with all encodings?).
+// Note that the choice of break point does not affect the validity of
+// the file data (when read back by conftree), only its ease of
+// editing with a normal editor.
 static ConfSimple::WalkerCode varprinter(void *f, const string& nm,
         const string& value)
 {
-    ostream *output = (ostream *)f;
+    ostream& output = *((ostream *)f);
     if (nm.empty()) {
-        *output << "\n[" << value << "]\n";
+        output << "\n[" << value << "]\n";
     } else {
-        string value1;
-        if (value.length() < 60) {
-            value1 = value;
+        output << nm << " = ";
+        if (nm.length() + value.length() < 75) {
+            output << value;
         } else {
-            string::size_type pos = 0;
-            while (pos < value.length()) {
-                string::size_type len = MIN(60, value.length() - pos);
-                value1 += value.substr(pos, len);
-                pos += len;
-                if (pos < value.length()) {
-                    value1 += "\\\n";
+            string::size_type ll = 0;
+            for (string::size_type pos = 0; pos < value.length(); pos++) {
+                string::value_type c = value[pos];
+                output << c;
+                ll++;
+                // Break at whitespace if line too long and "a lot" of
+                // remaining data
+                if (ll > 50 && (value.length() - pos) > 10 &&
+                        (c == ' ' || c == '\t')) {
+                    ll = 0;
+                    output << "\\\n";
                 }
             }
         }
-        *output << nm << " = " << value1 << "\n";
+        output << "\n";
     }
     return ConfSimple::WALK_CONTINUE;
 }
@@ -678,8 +637,9 @@ bool ConfSimple::hasNameAnywhere(const string& nm) const
 int ConfTree::get(const std::string& name, string& value, const string& sk)
 const
 {
-    if (sk.empty() || sk[0] != '/') {
-        //  LOGDEB((stderr, "ConfTree::get: looking in global space\n"));
+    if (sk.empty() || !path_isabsolute(sk)) {
+        // LOGDEB((stderr, "ConfTree::get: looking in global space for [%s]\n",
+        // sk.c_str()));
         return ConfSimple::get(name, value, sk);
     }
 
@@ -692,8 +652,8 @@ const
 
     // Look in subkey and up its parents until root ('')
     for (;;) {
-        //  LOGDEB((stderr,"ConfTree::get: looking for '%s' in '%s'\n",
-        //      name.c_str(), msk.c_str()));
+        // LOGDEB((stderr,"ConfTree::get: looking for '%s' in '%s'\n",
+        // name.c_str(), msk.c_str()));
         if (ConfSimple::get(name, value, msk)) {
             return 1;
         }
@@ -701,7 +661,12 @@ const
         if (pos != string::npos) {
             msk.replace(pos, string::npos, string());
         } else {
-            break;
+#ifdef _WIN32
+            if (msk.size() == 2 && isalpha(msk[0]) && msk[1] == ':') {
+                msk.clear();
+            } else
+#endif
+                break;
         }
     }
     return 0;
@@ -717,6 +682,10 @@ const
 #include <sstream>
 #include <iostream>
 #include <vector>
+
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "conftree.h"
 #include "smallut.h"
