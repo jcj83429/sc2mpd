@@ -3,6 +3,7 @@ AC_INIT([sc2mpd], [1.1.1], [jf@dockes.org],
 AC_PREREQ([2.53])
 AC_CONFIG_SRCDIR([sc2src/sc2mpd.cpp])
 AC_CONFIG_HEADERS([sc2src/config.h])
+AH_BOTTOM([#include "src/conf_post.h"])
 
 AM_INIT_AUTOMAKE([1.10 no-define subdir-objects foreign])
 
