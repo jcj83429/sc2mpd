@@ -74,11 +74,12 @@ using std::ostream;
 /** Internal class used for storing presentation information */
 class ConfLine {
 public:
-    enum Kind {CFL_COMMENT, CFL_SK, CFL_VAR};
+    enum Kind {CFL_COMMENT, CFL_SK, CFL_VAR, CFL_VARCOMMENT};
     Kind m_kind;
     string m_data;
-    ConfLine(Kind k, const string& d)
-        : m_kind(k), m_data(d) {
+    string m_aux;
+    ConfLine(Kind k, const string& d, string a = string())
+        : m_kind(k), m_data(d), m_aux(a) {
     }
     bool operator==(const ConfLine& o) {
         return o.m_kind == m_kind && o.m_data == m_data;
@@ -165,18 +166,33 @@ public:
     }
 
     /**
-     * Get value for named parameter, from specified subsection (looks in
-     * global space if sk is empty).
+     * Get string value for named parameter, from specified subsection (looks 
+     * in global space if sk is empty).
      * @return 0 if name not found, 1 else
      */
     virtual int get(const string& name, string& value,
                     const string& sk = string()) const;
 
     /**
-     * Set value for named parameter in specified subsection (or global)
+     * Get integer value for named parameter, from specified subsection (looks 
+     * in global space if sk is empty).
+     * @return 0 if name not found, 1 else
+     */
+    virtual int get(const string& name, int* value,
+                    const string& sk = string()) const;
+
+
+    /**
+     * Set value for named string parameter in specified subsection (or global)
      * @return 0 for error, 1 else
      */
     virtual int set(const string& nm, const string& val,
+                    const string& sk = string());
+    /**
+     * Set value for named integer parameter in specified subsection (or global)
+     * @return 0 for error, 1 else
+     */
+    virtual int set(const string& nm, long long val,
                     const string& sk = string());
 
     /**
@@ -224,10 +240,14 @@ public:
     virtual vector<string> getSubKeys(bool) const {
         return getSubKeys();
     }
+    virtual vector<string> getSubKeys() const;
+    
+    /** Return subkeys in file order. BEWARE: only for the original from the 
+     * file: the data is not duplicated to further copies */
     virtual vector<string> getSubKeys_unsorted(bool = false) const {
         return m_subkeys_unsorted;
     }
-    virtual vector<string> getSubKeys() const;
+
     /** Test for subkey existence */
     virtual bool hasSubKey(const string& sk) const {
         return m_submaps.find(sk) != m_submaps.end();
@@ -237,6 +257,13 @@ public:
         return m_filename;
     }
 
+    /** Used with config files with specially formatted, xml-like comments.
+     * Extract the comments as text */
+    virtual bool commentsAsXML(ostream& out);
+
+    /** !! Note that assignment and copy constructor do not copy the
+        auxiliary data (m_order and subkeys_unsorted). */
+    
     /**
      * Copy constructor. Expensive but less so than a full rebuild
      */
@@ -337,6 +364,7 @@ public:
      * @return 0 if name not found, 1 else
      */
     virtual int get(const string& name, string& value, const string& sk) const;
+    using ConfSimple::get;
 };
 
 /**
