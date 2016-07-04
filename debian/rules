@@ -16,6 +16,8 @@ OPENHOME=openhome
 %:
 	dh $@
 
+# Note: this supposes that the openhome tarfile has been extracted in
+# the source tree prior to launching the build.
 override_dh_auto_configure:
 	sh ./ohbuild.sh $(OPENHOME)
 	dh_auto_configure -- --with-openhome=$(OPENHOME)
