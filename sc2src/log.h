@@ -17,74 +17,158 @@
 #ifndef _LOG_H_X_INCLUDED_
 #define _LOG_H_X_INCLUDED_
 
-#include <fstream>                      // for ofstream
-#include <iostream>                     // for cerr, ostream
-#include <string>                       // for string
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
 
+#include <fstream> 
+#include <iostream>
+#include <string>
+#include <mutex>
 
-    class Logger {
-    public:
-        static Logger *getTheLog(const std::string& fn);
-        std::ostream& getstream() {
-            return m_tocerr ? std::cerr : m_stream;
-        }
-        enum LogLevel {LLNON, LLFAT, LLERR, LLINF, LLDEB, LLDEB1};
-        void setLogLevel(LogLevel level) {
-            m_loglevel = level;
-        }
-        int getloglevel() {
-            return m_loglevel;
-        }
-        
-    private:
-        bool m_tocerr;
-        int m_loglevel;
-        std::ofstream m_stream;
-        
-        Logger(const std::string& fn);
-	Logger(const Logger &);
-	Logger& operator=(const Logger &);
-    };
-        
-#define DEBOUT (Logger::getTheLog("")->getstream())
-#define LOCAL_LOGINC 0
-#define LOGLEVEL (Logger::getTheLog("")->getloglevel()+LOCAL_LOGINC)
+#ifndef LOGGER_THREADSAFE
+#define LOGGER_THREADSAFE 1
+#endif
 
+#if LOGGER_THREADSAFE
+#include <mutex>
+#endif
+
+// Can't use the symbolic Logger::LLXX names in preproc. 6 is LLDEB1
+#ifndef LOGGER_STATICVERBOSITY
+#define LOGGER_STATICVERBOSITY 6
+#endif
+
+class Logger {
+public:
+    /** Initialize logging to file name. Use "stderr" for stderr output */
+    static Logger *getTheLog(const std::string& fn);
+    std::ostream& getstream() {
+        return m_tocerr ? std::cerr : m_stream;
+    }
+    enum LogLevel {LLNON=0, LLFAT=1, LLERR=2, LLINF=3, LLDEB=4,
+                   LLDEB0=5, LLDEB1=6, LLDEB2=7};
+    void setLogLevel(LogLevel level) {
+        m_loglevel = level;
+    }
+    int getloglevel() {
+        return m_loglevel;
+    }
+
+#if LOGGER_THREADSAFE
+    std::mutex& getmutex() {
+        return m_mutex;
+    }
+#endif
+    
+private:
+    bool m_tocerr;
+    int m_loglevel;
+    std::ofstream m_stream;
+#if LOGGER_THREADSAFE
+    std::mutex m_mutex;
+#endif
+
+    Logger(const std::string& fn);
+    Logger(const Logger &);
+    Logger& operator=(const Logger &);
+};
+
+#define LOGGER_PRT (Logger::getTheLog("")->getstream())
+
+#if LOGGER_THREADSAFE
+#define LOGGER_LOCK \
+    std::unique_lock<std::mutex> lock(Logger::getTheLog("")->getmutex())
+#else
+#define LOGGER_LOCK
+#endif
+
+#ifndef LOGGER_LOCAL_LOGINC
+#define LOGGER_LOCAL_LOGINC 0
+#endif
+
+#define LOGGER_LEVEL (Logger::getTheLog("")->getloglevel() + \
+                      LOGGER_LOCAL_LOGINC)
+
+#define LOGGER_DOLOG(L,X) LOGGER_PRT << ":" << L << ":" <<            \
+                                  __FILE__ << ":" << __LINE__ << "::" << X
+
+#if LOGGER_STATICVERBOSITY >= 7
+#define LOGDEB2(X) {                                                    \
+        if (LOGGER_LEVEL >= Logger::LLDEB2) {                           \
+            LOGGER_LOCK;                                                \
+            LOGGER_DOLOG(Logger::LLDEB2, X);                            \
+        }                                                               \
+    }
+#else
+#define LOGDEB2(X)
+#endif
+
+#if LOGGER_STATICVERBOSITY >= 6
 #define LOGDEB1(X) {                                                    \
-        if (LOGLEVEL >= Logger::LLDEB1)                     \
-        {                                                               \
-            DEBOUT << __FILE__ << ":" << __LINE__<< "::"; DEBOUT << X;  \
+        if (LOGGER_LEVEL >= Logger::LLDEB1) {                           \
+            LOGGER_LOCK;                                                \
+            LOGGER_DOLOG(Logger::LLDEB1, X);                            \
         }                                                               \
     }
+#else
+#define LOGDEB1(X)
+#endif
 
+#if LOGGER_STATICVERBOSITY >= 5
+#define LOGDEB0(X) {                                                    \
+        if (LOGGER_LEVEL >= Logger::LLDEB0) {                           \
+            LOGGER_LOCK;                                                \
+            LOGGER_DOLOG(Logger::LLDEB0, X);                            \
+        }                                                               \
+    }
+#else
+#define LOGDEB0(X)
+#endif
+
+#if LOGGER_STATICVERBOSITY >= 4
 #define LOGDEB(X) {                                                     \
-        if (LOGLEVEL >= Logger::LLDEB)                      \
-        {                                                               \
-            DEBOUT << __FILE__ << ":" << __LINE__<< "::"; DEBOUT << X;  \
+        if (LOGGER_LEVEL >= Logger::LLDEB) {                            \
+            LOGGER_LOCK;                                                \
+            LOGGER_DOLOG(Logger::LLDEB, X);                             \
         }                                                               \
     }
+#else
+#define LOGDEB(X)
+#endif
 
+#if LOGGER_STATICVERBOSITY >= 3
 #define LOGINF(X) {                                                     \
-        if (LOGLEVEL >= Logger::LLINF)                      \
-        {                                                               \
-            DEBOUT << __FILE__ << ":" << __LINE__<< "::"; DEBOUT << X;  \
+        if (LOGGER_LEVEL >= Logger::LLINF) {                            \
+            LOGGER_LOCK;                                                \
+            LOGGER_DOLOG(Logger::LLINF, X);                             \
         }                                                               \
-    }                                                                   
+    }
+#else
+#define LOGINF(X)
+#endif
+#define LOGINFO LOGINF
 
+#if LOGGER_STATICVERBOSITY >= 2
 #define LOGERR(X) {                                                     \
-        if (LOGLEVEL >= Logger::LLERR)                      \
-        {                                                               \
-            DEBOUT << __FILE__ << ":" << __LINE__<< "::"; DEBOUT << X;  \
+        if (LOGGER_LEVEL >= Logger::LLERR) {                            \
+            LOGGER_LOCK;                                                \
+            LOGGER_DOLOG(Logger::LLERR, X);                             \
         }                                                               \
     }
+#else
+#define LOGERR(X)
+#endif
 
+#if LOGGER_STATICVERBOSITY >= 1
 #define LOGFAT(X) {                                                     \
-        if (LOGLEVEL >= Logger::LLFAT)                      \
-        {                                                               \
-            DEBOUT << __FILE__ << ":" << __LINE__<< "::"; DEBOUT << X;  \
+        if (LOGGER_LEVEL >= Logger::LLFAT) {                            \
+            LOGGER_LOCK;                                                \
+            LOGGER_DOLOG(Logger::LLFAT, X);                             \
         }                                                               \
     }
-
-
+#else
+#define LOGFAT(X)
+#endif
 
 #endif /* _LOG_H_X_INCLUDED_ */

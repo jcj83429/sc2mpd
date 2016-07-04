@@ -31,6 +31,7 @@
 #include "rcvqueue.h"
 #include "wav.h"
 #include "conftree.h"
+#include "ptmutex.h"
 
 using namespace std;
 

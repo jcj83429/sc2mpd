@@ -27,7 +27,7 @@ AM_CPPFLAGS += \
             -DWITH_WAVSC2
 endif
 
-AM_CXXFLAGS = -std=c++0x
+AM_CXXFLAGS = -std=c++11
 
 bin_PROGRAMS = sc2mpd mpd2sc
 
@@ -45,6 +45,7 @@ OTHEROSC2 = $(TOPSCO)/Ohm.o $(TOPSCO)/OhmMsg.o $(TOPSCO)/OhmSocket.o \
 
 sc2mpd_LDADD = $(OTHEROSC2) $(TOPOH)ohNet/$(OBJIPATH)libohNetCore.a \
      $(TOPOH)ohNet/$(OBJIPATH)libTestFramework.a $(OTHERLIBS)
+sc2mpd_CPPFLAGS = -I$(top_srcdir) $(AM_CPPFLAGS) 
 
 sc2mpd_SOURCES = \
      ohbuild.sh \
