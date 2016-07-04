@@ -24,6 +24,8 @@
 
 #include <iostream>
 #include <queue>
+#include <mutex>
+#include <condition_variable>
 
 #include <microhttpd.h>
 
@@ -31,7 +33,6 @@
 #include "rcvqueue.h"
 #include "wav.h"
 #include "conftree.h"
-#include "ptmutex.h"
 
 using namespace std;
 
@@ -60,8 +61,8 @@ static const int dataformat_wav = 1;
 
 // The queue for audio blocks out of SongCast
 static queue<AudioMessage*> dataqueue;
-static PTMutexInit dataqueueLock;
-static pthread_cond_t dataqueueWaitCond = PTHREAD_COND_INITIALIZER;
+static std::mutex dataqueueLock;
+static std::condition_variable dataqueueWaitCond;
 
 // Bogus data size for our streams. Total size is databytes+44 (header)
 const unsigned int databytes = 2 * 1000 * 1000 * 1000;
@@ -106,7 +107,7 @@ data_generator(void *cls, uint64_t pos, char *buf, size_t max)
         return MHD_CONTENT_READER_END_OF_STREAM;
     }
 
-    PTMutexLocker lock(dataqueueLock);
+    std::unique_lock<std::mutex> lock(dataqueueLock);
     // We only do the offset-fixing thing once per called because it's
     // based on the (unchanging) input parameters.
     bool offsetfixed = false;
@@ -114,7 +115,7 @@ data_generator(void *cls, uint64_t pos, char *buf, size_t max)
     while (bytes < max) {
         while (dataqueue.empty()) {
             //LOGDEB("data_generator: waiting for buffer" << endl);
-            pthread_cond_wait(&dataqueueWaitCond, lock.getMutex());
+            dataqueueWaitCond.wait(lock);
             if (!dataqueue.empty() && dataqueue.front()->m_buf == 0) {
                 // special buf, to be processed ?
                 LOGINF("data_generator: deleting empty buf" << endl);
@@ -333,7 +334,7 @@ static void *audioEater(void *cls)
             queue->workerExit();
             return (void*)1;
         }
-        PTMutexLocker lock(dataqueueLock);
+        std::unique_lock<std::mutex> lock(dataqueueLock);
 
         /* limit size of queuing. If there is a client but it is not
            eating blocks fast enough, there will be skips */
@@ -344,7 +345,7 @@ static void *audioEater(void *cls)
         }
 
         dataqueue.push(tsk);
-        pthread_cond_broadcast(&dataqueueWaitCond);
+        dataqueueWaitCond.notify_all();
         pthread_yield();
     }
 }

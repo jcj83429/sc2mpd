@@ -59,7 +59,6 @@ sc2mpd_SOURCES = \
      sc2src/log.h \
      sc2src/pathut.cpp \
      sc2src/pathut.h \
-     sc2src/ptmutex.h \
      sc2src/rcvqueue.h \
      sc2src/sc2mpd.cpp \
      sc2src/smallut.cpp \
