@@ -23,18 +23,35 @@
 using namespace std;
 
 Logger::Logger(const std::string& fn)
-    : m_tocerr(false), m_loglevel(LLDEB)
+    : m_tocerr(false), m_loglevel(LLDEB), m_fn(fn)
 {
-    if (!fn.empty() && fn.compare("stderr")) {
-        m_stream.open(fn.c_str(), std::fstream::out | std::ofstream::trunc);
+    reopen(fn);
+}
+
+bool Logger::reopen(const std::string& fn)
+{
+#if LOGGER_THREADSAFE
+    std::unique_lock<std::mutex> lock(m_mutex);
+#endif
+    if (!fn.empty()) {
+        m_fn = fn;
+    }
+    if (!m_tocerr && m_stream.is_open()) {
+        m_stream.close();
+    }
+    if (!m_fn.empty() && m_fn.compare("stderr")) {
+        m_stream.open(m_fn, std::fstream::out | std::ofstream::trunc);
         if (!m_stream.is_open()) {
             cerr << "Logger::Logger: log open failed: for [" <<
                  fn << "] errno " << errno << endl;
             m_tocerr = true;
+        } else {
+            m_tocerr = false;
         }
     } else {
         m_tocerr = true;
     }
+    return true;
 }
 
 static Logger *theLog;

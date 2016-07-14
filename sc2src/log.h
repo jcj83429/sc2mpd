@@ -17,10 +17,6 @@
 #ifndef _LOG_H_X_INCLUDED_
 #define _LOG_H_X_INCLUDED_
 
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
 #include <fstream> 
 #include <iostream>
 #include <string>
@@ -36,13 +32,17 @@
 
 // Can't use the symbolic Logger::LLXX names in preproc. 6 is LLDEB1
 #ifndef LOGGER_STATICVERBOSITY
-#define LOGGER_STATICVERBOSITY 6
+#define LOGGER_STATICVERBOSITY 5
 #endif
 
 class Logger {
 public:
-    /** Initialize logging to file name. Use "stderr" for stderr output */
+    /** Initialize logging to file name. Use "stderr" for stderr
+       output. Creates the singleton logger object */
     static Logger *getTheLog(const std::string& fn);
+
+    bool reopen(const std::string& fn);
+    
     std::ostream& getstream() {
         return m_tocerr ? std::cerr : m_stream;
     }
@@ -64,6 +64,7 @@ public:
 private:
     bool m_tocerr;
     int m_loglevel;
+    std::string m_fn;
     std::ofstream m_stream;
 #if LOGGER_THREADSAFE
     std::mutex m_mutex;
@@ -91,7 +92,8 @@ private:
                       LOGGER_LOCAL_LOGINC)
 
 #define LOGGER_DOLOG(L,X) LOGGER_PRT << ":" << L << ":" <<            \
-                                  __FILE__ << ":" << __LINE__ << "::" << X
+                                  __FILE__ << ":" << __LINE__ << "::" << X \
+    << std::flush
 
 #if LOGGER_STATICVERBOSITY >= 7
 #define LOGDEB2(X) {                                                    \
@@ -170,5 +172,6 @@ private:
 #else
 #define LOGFAT(X)
 #endif
+#define LOGFATAL LOGFAT
 
 #endif /* _LOG_H_X_INCLUDED_ */
