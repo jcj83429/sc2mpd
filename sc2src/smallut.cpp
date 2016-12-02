@@ -1,25 +1,20 @@
-/* Copyright (C) 2004-2016 J.F.Dockes
- *   This program is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or
- *   (at your option) any later version.
+/* Copyright (C) 2006-2016 J.F.Dockes
  *
- *   This program is distributed in the hope that it will be useful,
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *   GNU General Public License for more details.
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
- *   You should have received a copy of the GNU General Public License
- *   along with this program; if not, write to the
- *   Free Software Foundation, Inc.,
- *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ *   02110-1301 USA
  */
-#ifdef BUILDING_RECOLL
-#include "autoconfig.h"
-#else
-#include "config.h"
-#endif
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -188,6 +183,14 @@ int stringuppercmp(const string& s1, const string& s2)
         }
         return size1 == size2 ? 0 : 1;
     }
+}
+
+bool beginswith(const std::string& big, const std::string& small)
+{
+    if (big.compare(0, small.size(), small)) {
+        return false;
+    }
+    return true;
 }
 
 // Compare charset names, removing the more common spelling variations
@@ -523,16 +526,13 @@ string escapeHtml(const string& in)
 {
     string out;
     for (string::size_type pos = 0; pos < in.length(); pos++) {
-        switch (in.at(pos)) {
-        case '<':
-            out += "&lt;";
-            break;
-        case '&':
-            out += "&amp;";
-            break;
-        default:
-            out += in.at(pos);
-        }
+	switch(in.at(pos)) {
+	case '<': out += "&lt;"; break;
+	case '>': out += "&gt;"; break;
+	case '&': out += "&amp;"; break;
+	case '"': out += "&quot;"; break;
+	default: out += in.at(pos); break;
+	}
     }
     return out;
 }
@@ -1322,6 +1322,66 @@ bool SimpleRegexp::operator() (const string& val) const
 {
     return simpleMatch(val);
 }
+
+string flagsToString(const vector<CharFlags>& flags, unsigned int val)
+{
+    const char *s;
+    string out;
+    for (auto& flag : flags) {
+        if ((val & flag.value) == flag.value) {
+            s = flag.yesname;
+        } else {
+            s = flag.noname;
+        }
+        if (s && *s) {
+            /* We have something to write */
+            if (out.length()) {
+                // If not first, add '|' separator
+                out.append("|");
+            }
+            out.append(s);
+        }
+    }
+    return out;
+}
+
+string valToString(const vector<CharFlags>& flags, unsigned int val)
+{
+    string out;
+    for (auto& flag : flags) {
+        if (flag.value == val) {
+            out = flag.yesname;
+            return out;
+        }
+    }
+    {
+        char mybuf[100];
+        sprintf(mybuf, "Unknown Value 0x%x", val);
+        out = mybuf;
+    }
+    return out;
+}
+
+unsigned int stringToFlags(const vector<CharFlags>& flags,
+                           const string& input, const char *sep)
+{
+    unsigned int out = 0;
+
+    vector<string> toks;
+    stringToTokens(input, toks, sep);
+    for (auto& tok: toks) {
+        trimstring(tok);
+        for (auto& flag : flags) {
+            if (!tok.compare(flag.yesname)) {
+                /* Note: we don't break: the same name could conceivably
+                   set several flags. */
+                out |= flag.value;
+            }
+        }
+    }
+    return out;
+}
+
 
 // Initialization for static stuff to be called from main thread before going
 // multiple

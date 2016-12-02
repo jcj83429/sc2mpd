@@ -1,24 +1,27 @@
-/*   Copyright (C) 2012-2016 J.F.Dockes
- *   This program is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or
- *   (at your option) any later version.
+/* Copyright (C) 2006-2016 J.F.Dockes
  *
- *   This program is distributed in the hope that it will be useful,
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *   GNU General Public License for more details.
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
- *   You should have received a copy of the GNU General Public License
- *   along with this program; if not, write to the
- *   Free Software Foundation, Inc.,
- *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ *   02110-1301 USA
  */
 #ifndef _WORKQUEUE_H_INCLUDED_
 #define _WORKQUEUE_H_INCLUDED_
 
 #include <thread>
+#if HAVE_STD_FUTURE
 #include <future>
+#endif
 #include <string>
 #include <queue>
 #include <list>
@@ -76,10 +79,14 @@ public:
     bool start(int nworkers, void *(workproc)(void *), void *arg) {
         std::unique_lock<std::mutex> lock(m_mutex);
         for (int i = 0; i < nworkers; i++) {
-            std::packaged_task<void *(void *)> task(workproc);
             Worker w;
+#if HAVE_STD_FUTURE
+            std::packaged_task<void *(void *)> task(workproc);
             w.res = task.get_future();
             w.thr = std::thread(std::move(task), arg);
+#else
+            w.thr = std::thread(workproc, arg);
+#endif
             m_worker_threads.push_back(std::move(w));
         }
         return true;
@@ -189,7 +196,11 @@ public:
         // Workers return (void*)1 if ok
         void *statusall = (void*)1;
         while (!m_worker_threads.empty()) {
+#if HAVE_STD_FUTURE
             void *status = m_worker_threads.front().res.get();
+#else
+            void *status = (void*) 1;
+#endif
             m_worker_threads.front().thr.join();
             if (status == (void *)0) {
                 statusall = status;
@@ -305,7 +316,9 @@ private:
 
     struct Worker {
         std::thread         thr;
+#if HAVE_STD_FUTURE
         std::future<void *> res;
+#endif
     };
     
     // Configuration

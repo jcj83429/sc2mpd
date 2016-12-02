@@ -165,26 +165,26 @@ data_generator(void *cls, uint64_t pos, char *buf, size_t max)
     return bytes;
 }
 
-// Parse range header. 
-static void parseRanges(const string& ranges, vector<pair<int,int> >& oranges)
+static bool parseRanges(const string& ranges, vector<pair<int,int> >& oranges)
 {
     oranges.clear();
     string::size_type pos = ranges.find("bytes=");
     if (pos == string::npos) {
-        return;
+        return false;
     }
     pos += 6;
     bool done = false;
     while(!done) {
         string::size_type dash = ranges.find('-', pos);
+        if (dash == string::npos) {
+            return false;
+        }
         string::size_type comma = ranges.find(',', pos);
-        string firstPart = dash != string::npos ? 
-            ranges.substr(pos, dash-pos) : "";
+        string firstPart = ranges.substr(pos, dash-pos);
         int start = firstPart.empty() ? 0 : atoi(firstPart.c_str());
-        string secondPart = dash != string::npos ? 
-            ranges.substr(dash+1, comma != string::npos ? 
-                          comma-dash-1 : string::npos) : "";
-        int fin = secondPart.empty() ? -1 : atoi(firstPart.c_str());
+        string secondPart = ranges.substr(dash+1, comma != string::npos ? 
+                                          comma-dash-1 : string::npos);
+        int fin = secondPart.empty() ? -1 : atoi(secondPart.c_str());
         pair<int,int> nrange(start,fin);
         oranges.push_back(nrange);
         if (comma != string::npos) {
@@ -192,6 +192,7 @@ static void parseRanges(const string& ranges, vector<pair<int,int> >& oranges)
         }
         done = comma == string::npos;
     }
+    return true;
 }
 
 static void ContentReaderFreeCallback(void *cls)

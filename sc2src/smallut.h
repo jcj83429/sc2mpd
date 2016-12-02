@@ -1,18 +1,19 @@
-/* Copyright (C) 2004-2016 J.F.Dockes
- *   This program is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or
- *   (at your option) any later version.
+/* Copyright (C) 2006-2016 J.F.Dockes
  *
- *   This program is distributed in the hope that it will be useful,
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *   GNU General Public License for more details.
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
- *   You should have received a copy of the GNU General Public License
- *   along with this program; if not, write to the
- *   Free Software Foundation, Inc.,
- *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ *   02110-1301 USA
  */
 #ifndef _SMALLUT_H_INCLUDED_
 #define _SMALLUT_H_INCLUDED_
@@ -65,6 +66,7 @@ extern void stringtolower(std::string& io);
 extern std::string stringtolower(const std::string& io);
 extern void stringtoupper(std::string& io);
 extern std::string stringtoupper(const std::string& io);
+extern bool beginswith(const std::string& big, const std::string& small);
 
 // Is one string the end part of the other ?
 extern int stringisuffcmp(const std::string& s1, const std::string& s2);
@@ -218,45 +220,29 @@ private:
     Internal *m;
 };
 
-// Code for static initialization of an stl map. Somewhat like Boost.assign.
-// Ref: http://stackoverflow.com/questions/138600/initializing-a-static-stdmapint-int-in-c
-// Example use: map<int, int> m = create_map<int, int> (1,2) (3,4) (5,6) (7,8);
+/// Utilities for printing names for defined values (Ex: O_RDONLY->"O_RDONLY")
 
-template <typename T, typename U>
-class create_map {
-private:
-    std::map<T, U> m_map;
-public:
-    create_map(const T& key, const U& val) {
-        m_map[key] = val;
-    }
-
-    create_map<T, U>& operator()(const T& key, const U& val) {
-        m_map[key] = val;
-        return *this;
-    }
-
-    operator std::map<T, U>() {
-        return m_map;
-    }
+/// Entries for the descriptive table
+struct CharFlags {
+    unsigned int value; // Flag or value
+    const char *yesname;// String to print if flag set or equal
+    const char *noname; // String to print if flag not set (unused for values)
 };
-template <typename T>
-class create_vector {
-private:
-    std::vector<T> m_vector;
-public:
-    create_vector(const T& val) {
-        m_vector.push_back(val);
-    }
 
-    create_vector<T>& operator()(const T& val) {
-        m_vector.push_back(val);
-        return *this;
-    }
+/// Helper macro for the common case where we want to print the
+/// flag/value defined name
+#define CHARFLAGENTRY(NM) {NM, #NM}
 
-    operator std::vector<T>() {
-        return m_vector;
-    }
-};
+/// Translate a bitfield into string description
+extern std::string flagsToString(const std::vector<CharFlags>&,
+                                 unsigned int flags);
+
+/// Translate a value into a name
+extern std::string valToString(const std::vector<CharFlags>&, unsigned int val);
+
+/// Reverse operation: translate string into bitfield
+extern unsigned int
+stringToFlags(const std::vector<CharFlags>&, const std::string& input,
+              const char *sep = "|");
 
 #endif /* _SMALLUT_H_INCLUDED_ */
