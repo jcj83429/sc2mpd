@@ -89,7 +89,7 @@ static int alsa_recover(snd_pcm_t *pcm, int err)
         break;
     case SND_PCM_STATE_DISCONNECTED:
         break;
-	/* this is no error, so just keep running */
+        /* this is no error, so just keep running */
     case SND_PCM_STATE_RUNNING:
         err = 0;
         break;
@@ -438,12 +438,16 @@ static double compute_ratio(double& samplerate_ratio, int bufframes,
 static bool fixToFloats(AudioMessage *tsk, SRC_DATA& src_data,
                         size_t tot_samples)
 {
+
+    // For some reason, newer versions of libsamplerate define
+    // data_in as const
+    float *datain = (float *)&(src_data.data_in[0]);
     switch (tsk->m_bits) {
     case 16: 
     {
         const short *sp = (const short *)tsk->m_buf;
         for (unsigned int i = 0; i < tot_samples; i++) {
-            src_data.data_in[i] = *sp++;
+            datain[i] = *sp++;
         }
     }
     break;
@@ -457,7 +461,7 @@ static bool fixToFloats(AudioMessage *tsk, SRC_DATA& src_data,
             ocp[1] = *icp++;
             ocp[2] = *icp++;
             ocp[3] = (ocp[2] & 0x80) ? 0xff : 0;
-            src_data.data_in[i] = o;
+            datain[i] = o;
         }
     }
     break;
@@ -465,7 +469,7 @@ static bool fixToFloats(AudioMessage *tsk, SRC_DATA& src_data,
     {
         const int *ip = (const int *)tsk->m_buf;
         for (unsigned int i = 0; i < tot_samples; i++) {
-            src_data.data_in[i] = *ip++;
+            datain[i] = *ip++;
         }
     }
     break;
@@ -602,7 +606,7 @@ bool stretch_buffer(AudioMessage *tsk,
     size_t needed_bytes = tot_samples * sizeof(float);
     if (src_input_bytes < needed_bytes) {
         src_data.data_in =
-            (float *)realloc(src_data.data_in, needed_bytes);
+            (float *)realloc((void *)src_data.data_in, needed_bytes);
         src_data.data_out = (float *)realloc(src_data.data_out,
                                              2 * needed_bytes);
         src_data.output_frames = 2 * tot_samples / tsk->m_chans;
@@ -746,7 +750,7 @@ alsaerror:
             free(src_state);
         }
     }
-    free(src_data.data_in);
+    free((void *)src_data.data_in);
     free(src_data.data_out);
     LOGDEB("audioEater returning");
     return (void *)1;
