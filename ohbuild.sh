@@ -115,7 +115,7 @@ clone_oh()
     # only if 'uset4' is set (which it is not by default). Common.mak
     # should heed uset4, but it does not. This does not seem to have
     # consequences, and the errors are suppressed by defining t4 as 'echo'
-    patch -p1 <<EOF
+    patch -p1 << "EOF"
 diff --git a/Makefile b/Makefile
 index 7c0dae8..6f51a86 100644
 --- a/Makefile
@@ -124,7 +124,7 @@ index 7c0dae8..6f51a86 100644
      ifeq ($(gcc_machine),arm-linux-gnueabihf)
        detected_openhome_architecture = armhf
      endif
-+    ifeq ($(gcc_machine),armv6l-unknown-linux-gnueabihf)
++    ifneq (,$(findstring linux-gnueabihf,$(gcc_machine)))
 +      detected_openhome_architecture = armhf
 +    endif
      ifneq (,$(findstring i686,$(gcc_machine)))
@@ -144,7 +144,7 @@ EOF
     # Jul 30 2015
     git checkout 92294ce514dbe38fa569fce8b58588f40bf09cdb || exit 1
     git checkout Makefile
-    patch -p1 <<EOF
+    patch -p1 << "EOF"
 diff --git a/Makefile b/Makefile
 index a7b84e3..5175a6f 100644
 --- a/Makefile
@@ -153,7 +153,7 @@ index a7b84e3..5175a6f 100644
      ifeq ($(gcc_machine),arm-linux-gnueabihf)
        detected_openhome_architecture = armhf
      endif
-+    ifeq ($(gcc_machine),armv6l-unknown-linux-gnueabihf)
++    ifneq (,$(findstring linux-gnueabihf,$(gcc_machine)))
 +      detected_openhome_architecture = armhf
 +    endif
      ifneq (,$(findstring i686,$(gcc_machine)))
