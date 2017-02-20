@@ -440,12 +440,12 @@ static int playWav(const string& wavfile, AudioEater *eater,
 
 int CDECL main(int aArgc, char* aArgv[])
 {
-    string logfilename;
+    string logfilename, netif;
     int loglevel(Logger::LLINF);
 
     OptionParser parser;
 
-    OptionUint optionAdapter("-a", "--adapter", 0, 
+    OptionUint optionAdapter("-a", "--adapter", (TUint)-1, 
                              "[adapter] index of network adapter to use");
     parser.AddOption(&optionAdapter);
 
@@ -503,6 +503,10 @@ int CDECL main(int aArgc, char* aArgv[])
     }
     Logger::getTheLog("")->setLogLevel(Logger::LogLevel(loglevel));
 
+    if(!config.get("upnpiface", netif)){
+	netif = "";
+    }
+
     AudioEater::Context *ctxt = new AudioEater::Context(&audioqueue);
     ctxt->config = &config;
 
@@ -523,9 +527,34 @@ int CDECL main(int aArgc, char* aArgv[])
 
     Library* lib = new Library(initParams);
 
+    TIpAddress subnet, adapter;
     std::vector<NetworkAdapter*>* subnetList = lib->CreateSubnetList();
-    TIpAddress subnet = (*subnetList)[optionAdapter.Value()]->Subnet();
-    TIpAddress adapter = (*subnetList)[optionAdapter.Value()]->Address();
+
+    if(optionAdapter.Value() != (TUint)-1){
+	LOGINF("scmpdcli: using specified adapter " << endl);
+	subnet = (*subnetList)[optionAdapter.Value()]->Subnet();
+	adapter = (*subnetList)[optionAdapter.Value()]->Address();
+    }else{
+	bool found = false;
+	if(netif != ""){
+	    LOGINF("scmpdcli: using upnpiface from config file " << netif << endl);
+	    for(std::vector<NetworkAdapter*>::iterator it = (*subnetList).begin(); it != (*subnetList).end(); ++it){
+		if(netif == (*it)->Name()){
+		    subnet = (*it)->Subnet();
+		    adapter = (*it)->Address();
+		    found = true;
+		    break;
+		}
+	    }
+	}
+
+	if(!found){
+	    LOGINF("scmpdcli: falling back to adapter 0" << endl);
+	    subnet = (*subnetList)[0]->Subnet();
+	    adapter = (*subnetList)[0]->Address();
+	}
+    }
+
     Library::DestroySubnetList(subnetList);
 
     TUint ttl = optionTtl.Value();
