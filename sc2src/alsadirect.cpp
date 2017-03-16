@@ -325,7 +325,8 @@ public:
         if (idx == FNS)
             idx = 0;
         sum -= buf[idx];
-        return sum/FNS;
+	double avg = sum/FNS;
+        return (avg > 1.05 || avg < 0.95 ? avg : (avg > 1.02 || avg < 0.98 ? (avg+4)/5 : 1.0));
     }
     double old;
     double buf[FNS];
